@@ -219,6 +219,8 @@ struct list_head *zms_get_free_list(struct zms_ftl *zms_ftl, int location)
 	struct list_head *line_list;
 	switch (location) {
 	case LOC_PSLC:
+	case LOC_COLD_PSLC:
+	case LOC_ZONED_PSLC:
 		line_list = &lm->pslc_free_line_list;
 		break;
 	default:
@@ -234,6 +236,8 @@ struct list_head *zms_get_full_list(struct zms_ftl *zms_ftl, int location)
 	struct list_head *line_list;
 	switch (location) {
 	case LOC_PSLC:
+	case LOC_COLD_PSLC:
+	case LOC_ZONED_PSLC:
 		line_list = &lm->pslc_full_line_list;
 		break;
 	default:
@@ -249,6 +253,8 @@ struct pqueue_t *zms_get_victim_pq(struct zms_ftl *zms_ftl, int location)
 	struct pqueue_t *victim_pq = NULL;
 	switch (location) {
 	case LOC_PSLC:
+	case LOC_COLD_PSLC:
+	case LOC_ZONED_PSLC:
 		victim_pq = lm->pslc_victim_line_pq;
 		break;
 	default:
@@ -263,6 +269,8 @@ void dec_free_cnt(struct zms_ftl *zms_ftl, int location)
 	struct zms_line_mgmt *lm = &zms_ftl->lm;
 	switch (location) {
 	case LOC_PSLC:
+	case LOC_COLD_PSLC:
+	case LOC_ZONED_PSLC:
 		lm->pslc_free_line_cnt--;
 		break;
 	default:
@@ -276,6 +284,8 @@ void inc_free_cnt(struct zms_ftl *zms_ftl, int location)
 	struct zms_line_mgmt *lm = &zms_ftl->lm;
 	switch (location) {
 	case LOC_PSLC:
+	case LOC_COLD_PSLC:
+	case LOC_ZONED_PSLC:
 		lm->pslc_free_line_cnt++;
 		break;
 	default:
@@ -289,6 +299,8 @@ void dec_victim_cnt(struct zms_ftl *zms_ftl, int location)
 	struct zms_line_mgmt *lm = &zms_ftl->lm;
 	switch (location) {
 	case LOC_PSLC:
+	case LOC_COLD_PSLC:
+	case LOC_ZONED_PSLC:
 		lm->pslc_victim_line_cnt--;
 		break;
 	default:
@@ -302,6 +314,8 @@ void inc_victim_cnt(struct zms_ftl *zms_ftl, int location)
 	struct zms_line_mgmt *lm = &zms_ftl->lm;
 	switch (location) {
 	case LOC_PSLC:
+	case LOC_COLD_PSLC:
+	case LOC_ZONED_PSLC:
 		lm->pslc_victim_line_cnt++;
 		break;
 	default:
@@ -315,6 +329,8 @@ void dec_full_cnt(struct zms_ftl *zms_ftl, int location)
 	struct zms_line_mgmt *lm = &zms_ftl->lm;
 	switch (location) {
 	case LOC_PSLC:
+	case LOC_COLD_PSLC:
+	case LOC_ZONED_PSLC:
 		lm->pslc_full_line_cnt--;
 		break;
 	default:
@@ -328,6 +344,8 @@ void inc_full_cnt(struct zms_ftl *zms_ftl, int location)
 	struct zms_line_mgmt *lm = &zms_ftl->lm;
 	switch (location) {
 	case LOC_PSLC:
+	case LOC_COLD_PSLC:
+	case LOC_ZONED_PSLC:
 		lm->pslc_full_line_cnt++;
 		break;
 	default:
@@ -434,6 +452,16 @@ void print_lines(struct zms_ftl *zms_ftl)
 	if (zms_ftl->pslc_wp.curline) {
 		NVMEV_INFO("[pSLC] current line id (%d,%d)\n", zms_ftl->pslc_wp.curline->parent_id,
 				   zms_ftl->pslc_wp.curline->id);
+		pslc_active_line++;
+	}
+	if (zms_ftl->pslc_zone_wp.curline) {
+		NVMEV_INFO("[pSLC] current zoned line id (%d,%d)\n",
+				   zms_ftl->pslc_zone_wp.curline->parent_id, zms_ftl->pslc_zone_wp.curline->id);
+		pslc_active_line++;
+	}
+	if (zms_ftl->pslc_cold_wp.curline) {
+		NVMEV_INFO("[pSLC] current cold line id (%d,%d)\n",
+				   zms_ftl->pslc_cold_wp.curline->parent_id, zms_ftl->pslc_cold_wp.curline->id);
 		pslc_active_line++;
 	}
 	if (zms_ftl->pslc_gc_wp.curline) {
@@ -959,8 +987,10 @@ static void init_write_pointer(struct zms_ftl *zms_ftl, uint32_t io_type, int lo
 	update_write_pointer(wp, ppa);
 
 	NVMEV_INFO("Init %s wp for %s IO, line id %d blk id %d\n",
-			   (location == LOC_PSLC) ? "slc" : "normal", io_type == GC_IO ? "GC" : "USER",
-			   curline->id, wp->blk);
+			   (location == LOC_PSLC || location == LOC_ZONED_PSLC || location == LOC_COLD_PSLC)
+				   ? "slc"
+				   : "normal",
+			   io_type == GC_IO ? "GC" : "USER", curline->id, wp->blk);
 }
 
 static void advance_write_pointer(struct zms_ftl *zms_ftl, uint32_t io_type, int loc)
@@ -1301,7 +1331,7 @@ static int get_mapping_granularity(struct zms_ftl *zms_ftl, int loc)
 		return PAGE_MAP;
 	if (loc == LOC_NORMAL)
 		return ZONE_MAP;
-	if (ZONED_SLC && !SLC_BYPASS)
+	if (loc == LOC_ZONED_PSLC && !SLC_BYPASS)
 		return SUB_ZONE_MAP;
 	return PAGE_MAP;
 }
@@ -1309,7 +1339,9 @@ static int get_mapping_granularity(struct zms_ftl *zms_ftl, int loc)
 static inline bool should_gc_high(struct zms_ftl *zms_ftl, int location)
 {
 	int free_line_cnt =
-		location == LOC_PSLC ? zms_ftl->lm.pslc_free_line_cnt : zms_ftl->lm.free_line_cnt;
+		(location == LOC_PSLC || location == LOC_COLD_PSLC || location == LOC_ZONED_PSLC)
+			? zms_ftl->lm.pslc_free_line_cnt
+			: zms_ftl->lm.free_line_cnt;
 	return free_line_cnt <= zms_ftl->zp.gc_thres_lines_high;
 }
 
@@ -1344,10 +1376,13 @@ static bool is_active_line(struct zms_ftl *zms_ftl, struct zms_line *line)
 {
 	struct zms_write_pointer *pslc_gc_wp = zms_get_wp(zms_ftl, GC_IO, LOC_PSLC);
 	struct zms_write_pointer *pslc_user_wp = zms_get_wp(zms_ftl, USER_IO, LOC_PSLC);
+	struct zms_write_pointer *pslc_zoned_user_wp = zms_get_wp(zms_ftl, USER_IO, LOC_ZONED_PSLC);
+	struct zms_write_pointer *pslc_cold_user_wp = zms_get_wp(zms_ftl, USER_IO, LOC_COLD_PSLC);
 	struct zms_write_pointer *gc_wp = zms_get_wp(zms_ftl, GC_IO, LOC_NORMAL);
 	struct zms_write_pointer *user_wp = zms_get_wp(zms_ftl, USER_IO, LOC_NORMAL);
 	if (line != gc_wp->curline && line != user_wp->curline && line != pslc_gc_wp->curline &&
-		line != pslc_user_wp->curline) {
+		line != pslc_user_wp->curline && line != pslc_zoned_user_wp->curline &&
+		line != pslc_cold_user_wp->curline) {
 		return false;
 	} else {
 		return true;
@@ -1386,6 +1421,7 @@ static void mark_line_free(struct zms_ftl *zms_ftl, struct zms_line *line, int i
 	line->vpc = 0;
 	line->rpc = 0;
 	line->rsv_nextline = NULL;
+	line->minlpn = UINT_MAX;
 
 	/* move this line to free line list */
 	if (!is_active) {
@@ -1395,6 +1431,7 @@ static void mark_line_free(struct zms_ftl *zms_ftl, struct zms_line *line, int i
 	} else {
 		struct zms_write_pointer *pslc_gc_wp = zms_get_wp(zms_ftl, GC_IO, LOC_PSLC);
 		struct zms_write_pointer *pslc_user_wp = zms_get_wp(zms_ftl, USER_IO, LOC_PSLC);
+		struct zms_write_pointer *pslc_zoned_user_wp = zms_get_wp(zms_ftl, USER_IO, LOC_ZONED_PSLC);
 		struct zms_write_pointer *gc_wp = zms_get_wp(zms_ftl, GC_IO, LOC_NORMAL);
 		struct zms_write_pointer *user_wp = zms_get_wp(zms_ftl, USER_IO, LOC_NORMAL);
 		struct zms_write_pointer *wp;
@@ -1415,6 +1452,10 @@ static void mark_line_free(struct zms_ftl *zms_ftl, struct zms_line *line, int i
 			wp = pslc_user_wp;
 			NVMEV_INFO("Reset curline of pslc user wp. PPA loc %d IO TYPE %d line id %d,%d\n",
 					   location, io_type, line->id, line->parent_id);
+		} else {
+			wp = pslc_zoned_user_wp;
+			NVMEV_INFO("Reset curline of pslc zoned user wp. PPA loc %d IO TYPE %d line id %d,%d\n",
+					   location, io_type, line->id, line->parent_id);
 		}
 
 		wp->ch = 0;
@@ -1428,6 +1469,8 @@ static void mark_line_free(struct zms_ftl *zms_ftl, struct zms_line *line, int i
 
 		if (io_type != MIGRATE_IO && !is_active) {
 			if (line->mid.pos) {
+				pqueue_remove(zms_ftl->migrating_line_pq,
+								  &line->mid); // migrate line is removed in try_migrate
 				line->mid.pos = 0;
 				line->mid.write_order = 0;
 			}
@@ -1455,7 +1498,7 @@ static inline void check_and_refill_write_credit(struct zms_ftl *zms_ftl, int lo
 
 static inline void consume_write_credit(struct zms_ftl *zms_ftl, int location)
 {
-	if (location == LOC_PSLC) {
+	if (location == LOC_PSLC || location == LOC_COLD_PSLC || location == LOC_ZONED_PSLC) {
 		zms_ftl->pslc_wfc.write_credits--;
 	} else {
 		zms_ftl->wfc.write_credits--;
@@ -1505,11 +1548,14 @@ static int update_mapping_if_reserved(struct zms_ftl *zms_ftl, uint64_t lpn, int
 	dec_line_rpc(zms_ftl, &ppa);
 
 	struct zms_line *current_line = get_line(zms_ftl, &ppa);
+	if (lpn < current_line->minlpn)
+		current_line->minlpn = lpn;
 
 	if (io_type == USER_IO && get_namespace_type(zms_ftl->zp.ns_type) != META_NAMESPACE &&
 		(current_line->rpc == 0 &&
 		 current_line->vpc + current_line->ipc == current_line->pgs_per_line)) {
-		if (loc == LOC_PSLC) {
+		if ((!UBLOCK && (loc == LOC_PSLC || loc == LOC_COLD_PSLC || loc == LOC_ZONED_PSLC)) ||
+			(UBLOCK && loc == LOC_ZONED_PSLC)){
 			zms_ftl->line_write_cnt++;
 			current_line->mid.write_order = zms_ftl->line_write_cnt;
 			pqueue_insert(zms_ftl->migrating_line_pq, &current_line->mid);
@@ -1541,7 +1587,7 @@ static void update_or_reserve_mapping(struct zms_ftl *zms_ftl, uint64_t lpn, int
 {
 	if (update_mapping_if_reserved(zms_ftl, lpn, loc, io_type) != SUCCESS) {
 		if ((loc == LOC_NORMAL && zms_ftl->device_full) ||
-			(loc == LOC_PSLC && zms_ftl->pslc_full)) {
+			((loc == LOC_PSLC || loc == LOC_COLD_PSLC || loc == LOC_ZONED_PSLC)  && zms_ftl->pslc_full)) {
 			NVMEV_ERROR("%s no free page! io_type %d dest location %d lpn %lld\n", __func__,
 						io_type, loc, lpn);
 			return;
@@ -1583,11 +1629,15 @@ static void update_or_reserve_mapping(struct zms_ftl *zms_ftl, uint64_t lpn, int
 		set_map_gran(zms_ftl, PAGE_MAP, slpn);
 
 		struct zms_line *current_line = get_line(zms_ftl, &ppa);
+		if (slpn < current_line->minlpn)
+			current_line->minlpn = slpn;
 		if (io_type == USER_IO &&
 			get_namespace_type(zms_ftl->zp.ns_type) != META_NAMESPACE &&
 			(current_line->rpc == 0 &&
 			 current_line->vpc + current_line->ipc == current_line->pgs_per_line)) {
-			if (loc == LOC_PSLC) {
+			if ((!UBLOCK &&
+						 (loc == LOC_PSLC || loc == LOC_COLD_PSLC || loc == LOC_ZONED_PSLC)) ||
+						(UBLOCK && loc == LOC_ZONED_PSLC)) {
 				zms_ftl->line_write_cnt++;
 				current_line->mid.write_order = zms_ftl->line_write_cnt;
 				pqueue_insert(zms_ftl->migrating_line_pq, &current_line->mid);
@@ -1688,7 +1738,7 @@ static uint64_t nand_write(struct zms_ftl *zms_ftl, uint64_t nsecs_start, uint64
 		return nsecs_start;
 	}
 
-	if ((location == LOC_PSLC && zms_ftl->pslc_full) ||
+	if (((location == LOC_PSLC || location == LOC_COLD_PSLC || location == LOC_ZONED_PSLC)  && zms_ftl->pslc_full) ||
 		(location == LOC_NORMAL && zms_ftl->device_full)) {
 		// NVMEV_ERROR("%s: no free pages! io_type %d dest %s lpn %lld\n", __func__, io_type,
 		// 			location == LOC_NORMAL ? "normal" : "slc", lpn);
@@ -1698,7 +1748,7 @@ static uint64_t nand_write(struct zms_ftl *zms_ftl, uint64_t nsecs_start, uint64
 	}
 
 	if (is_last_pg_in_wordline(zms_ftl, &ppa) || lpn == elpn) {
-		int pgs = location == LOC_PSLC ? spp->pslc_pgs_per_oneshotpg : spp->pgs_per_oneshotpg;
+		int pgs = (location == LOC_PSLC || location == LOC_COLD_PSLC || location == LOC_ZONED_PSLC)? spp->pslc_pgs_per_oneshotpg : spp->pgs_per_oneshotpg;
 		if (to_write_pgs < pgs) {
 			pgs = to_write_pgs;
 		}
@@ -1725,12 +1775,17 @@ static uint64_t nand_write(struct zms_ftl *zms_ftl, uint64_t nsecs_start, uint64
 			zms_ftl->migration_pgs += pgs;
 		if (io_type == GC_IO)
 			zms_ftl->gc_pgs += pgs;
+		if (location == LOC_PSLC || location == LOC_COLD_PSLC || location == LOC_ZONED_PSLC) {
+			zms_ftl->slc_w_pgs += pgs;
+		} else {
+			zms_ftl->qlc_w_pgs += pgs;
+		}
 	}
 
 	// NVMEV_INFO("%s flushed %d pgs( idx %d loc %d) ppa ch %d lun %d pl %d blk %d pg %d
 	// \n",__func__,pgs,idx,loc,ppa.zms.ch,ppa.zms.lun,ppa.zms.pl,ppa.zms.blk,ppa.zms.pg);
 	if (io_type == USER_IO) {
-		if (get_namespace_type(zms_ftl->zp.ns_type) != META_NAMESPACE && location == LOC_PSLC) {
+		if (get_namespace_type(zms_ftl->zp.ns_type) != META_NAMESPACE && (location == LOC_PSLC || location == LOC_COLD_PSLC || location == LOC_ZONED_PSLC)) {
 			if (SLC_BYPASS) {
 				consume_write_credit(zms_ftl, location);
 				check_and_refill_write_credit(zms_ftl, location);
@@ -1888,7 +1943,7 @@ static uint64_t internal_write(struct zms_ftl *zms_ftl, uint64_t *write_lpns, in
 				// NVMEV_ASSERT(0);
 			}
 
-			if (ZONED_SLC && io_type == MIGRATE_IO && (dest_loc == LOC_PSLC)) {
+			if (ZONED_SLC && io_type == MIGRATE_IO && (dest_loc == LOC_PSLC || dest_loc == LOC_COLD_PSLC || dest_loc == LOC_ZONED_PSLC)) {
 				NVMEV_ERROR("shoudl not go here... cur lpn %lld slpn %lld elpn %lld\n", lpn,
 							write_lpns[0], write_lpns[eidx - 1]);
 				// NVMEV_ASSERT(0);
@@ -2320,7 +2375,8 @@ static void try_migrate(struct zms_ftl *zms_ftl)
 		int direct_erase = 0;
 		int serch_zid = 0;
 
-		int eio_type = USER_IO;
+	try_erase:
+		int eio_type = UBLOCK ? MIGRATE_IO : USER_IO;
 		// io type == USER IO, so if the erased lines are in victim_pq or migrat_pq, they will be
 		// removed from them.
 		struct zms_line_mgmt *lm = &zms_ftl->lm;
@@ -2332,6 +2388,9 @@ static void try_migrate(struct zms_ftl *zms_ftl)
 						NVMEV_CONZONE_GC_DEBUG(
 							"try direct earse line %d parent id %d pgs per line %ld\n", j, i,
 							lm->lines[i].pgs_per_line);
+						NVMEV_CONZONE_OOO_PATH_DEBUG(
+							"[PATH II] earse line %d parent id %d pgs per line %ld\n", j, i,
+							lm->lines[i].pgs_per_line);
 						erase_line(zms_ftl, &lm->lines[i].sub_lines[j], eio_type);
 						if (!direct_erase)
 							direct_erase = 1;
@@ -2342,6 +2401,9 @@ static void try_migrate(struct zms_ftl *zms_ftl)
 					lm->lines[i].ipc == lm->lines[i].pgs_per_line) {
 					NVMEV_CONZONE_GC_DEBUG("try direct earse line %d pgs per line %ld\n", i,
 										   lm->lines[i].pgs_per_line);
+					NVMEV_CONZONE_OOO_PATH_DEBUG("[PATH II] earse line %d pgs per line %ld\n", i,
+												 lm->lines[i].pgs_per_line);
+					erase_line(zms_ftl, &lm->lines[i], eio_type);
 					if (!direct_erase)
 						direct_erase = 1;
 				}
@@ -2359,6 +2421,82 @@ static void try_migrate(struct zms_ftl *zms_ftl)
 
 		zms_ftl->should_migrate_times++;
 
+		// try to migrate cold pslc lines
+		if (zms_ftl->zp.ns_type == SSD_TYPE_CONZONE_ZONED && UBLOCK) {
+			int is_cold_migrated = 0;
+			for (uint32_t zid = serch_zid; zid < zms_ftl->zp.nr_zones; zid++) {
+				struct zone_descriptor *zone_descs = &zms_ftl->zone_descs[zid];
+				uint64_t wp = zone_descs->wp;
+				uint64_t ewp = zone_descs->zslba + zone_descs->zone_capacity;
+				if (zms_ftl->zone_hotness[zid] != COLD)
+					continue;
+				if (wp >= ewp)
+					continue;
+				uint64_t lpn = wp / zms_ftl->ssd->sp.secs_per_pg;
+				struct ppa ppa = get_maptbl_ent(zms_ftl, lpn);
+				if (!mapped_ppa(&ppa))
+					continue;
+				if (get_page_location(zms_ftl, &ppa) == LOC_NORMAL)
+					continue;
+				NVMEV_CONZONE_OOO_PATH_DEBUG(
+					"[PATH II] zid %d strat migrating fot cold pages current wp %lld\n", zid, wp);
+				uint64_t slpn = lpn;
+				uint64_t elpn = lpn;
+				while (lpn < ewp / zms_ftl->ssd->sp.secs_per_pg) {
+					ppa = get_maptbl_ent(zms_ftl, lpn);
+					if (!mapped_ppa(&ppa))
+						break;
+					if (get_page_location(zms_ftl, &ppa) == LOC_NORMAL) {
+						NVMEV_ERROR("OUT-OF-ORDER IN LOC_NORMAL? lpn %lld\n", lpn);
+						print_ppa(ppa);
+						break;
+					}
+					elpn = lpn;
+					lpn++;
+				}
+				uint64_t migrate_len = elpn - slpn + 1;
+				uint64_t unaligned = migrate_len % zms_ftl->zone_write_unit;
+				if (unaligned >= migrate_len) {
+					elpn = slpn - 1; // do not migrate
+				} else {
+					elpn -= unaligned;
+					migrate_len -= unaligned;
+				}
+				if (elpn >= slpn) {
+					is_cold_migrated = 1;
+					NVMEV_CONZONE_OOO_PATH_DEBUG(
+						"[PATH II] zid %d trying to migrate pages from cold page "
+						"SLC to QLC [%lld,%lld]\n",
+						zid, slpn, elpn);
+					uint64_t *migrate_lpns = kmalloc(migrate_len * sizeof(uint64_t), GFP_KERNEL);
+					if (!migrate_lpns) {
+						NVMEV_ERROR("[%d] %s: Failed to allocate memory for %llu LPNs\n",
+									zms_ftl->zp.ns->id, __func__, migrate_len);
+						break;
+					}
+					for (int j = 0; j < migrate_len; j++) {
+						migrate_lpns[j] = slpn + j;
+					}
+					uint64_t migrate_complete_time = internal_write(
+						zms_ftl, migrate_lpns, 0, migrate_len, MIGRATE_IO, LOC_NORMAL, 0);
+					NVMEV_CONZONE_OOO_PATH_DEBUG(
+						"[PATH II] zid %d migration completes at %lld us \n", zid,
+						migrate_complete_time / 1000);
+					kfree(migrate_lpns);
+					NVMEV_CONZONE_OOO_PATH_DEBUG(
+						"[PATH II] zid %d try increase wp %lld zone end %lld \n", zid, wp,
+						(zone_descs->zslba + zone_descs->zone_capacity));
+					__increase_write_ptr((struct zns_ftl *)(&(*zms_ftl)), zid,
+										 (elpn - slpn + 1) * zms_ftl->ssd->sp.secs_per_pg);
+					serch_zid = zid + 1;
+					break;
+				}
+			}
+			if (is_cold_migrated) {
+				is_cold_migrated = 0;
+				goto try_erase;
+			}
+		}
 		if (zms_ftl->zp.ns_type == SSD_TYPE_CONZONE_BLOCK ||
 			(ZONED_SLC && zms_ftl->zp.ns_type == SSD_TYPE_CONZONE_ZONED)) {
 			sblk_line = do_migrate_simple(zms_ftl, MIGRATE_IO);
@@ -2430,7 +2568,7 @@ static int do_gc(struct zms_ftl *zms_ftl, bool force, int location)
 static void foreground_gc(struct zms_ftl *zms_ftl, int location)
 {
 	struct zms_line_mgmt *lm = &zms_ftl->lm;
-	struct zms_write_flow_control *wfc = location == LOC_PSLC ? &zms_ftl->pslc_wfc : &zms_ftl->wfc;
+	struct zms_write_flow_control *wfc = (location == LOC_PSLC || location == LOC_COLD_PSLC || location == LOC_ZONED_PSLC) ? &zms_ftl->pslc_wfc : &zms_ftl->wfc;
 	if (should_gc_high(zms_ftl, location)) {
 		wfc->credits_to_refill = 0;
 		if (zms_ftl->device_full || zms_ftl->pslc_full) {
@@ -2446,7 +2584,7 @@ static void foreground_gc(struct zms_ftl *zms_ftl, int location)
 		// }
 	} else {
 		wfc->credits_to_refill =
-			location == LOC_PSLC ? zms_ftl->zp.pslc_pgs_per_line : zms_ftl->zp.pgs_per_line;
+			(location == LOC_PSLC || location == LOC_COLD_PSLC || location == LOC_ZONED_PSLC)? zms_ftl->zp.pslc_pgs_per_line : zms_ftl->zp.pgs_per_line;
 	}
 }
 
@@ -2467,11 +2605,15 @@ static uint32_t zns_write_check(struct zms_ftl *zms_ftl, struct nvme_rw_command 
 
 	// check if slba == current write pointer
 	if (slba != zone_descs[zid].wp) {
-		NVMEV_ERROR("%s WP error slba %lld nr_lba %lld zone_id %d wp %lld cap %lld state %d opcode "
+		// NVMEV_INFO("[OOO] BAD order, cnt=%d\n", zms_ftl->badorder);
+		zms_ftl->badorder++;
+		if (!UBLOCK) {
+			NVMEV_ERROR("%s WP error slba %lld nr_lba %lld zone_id %d wp %lld cap %lld state %d opcode "
 					"0x%x\n",
 					__func__, slba, nr_lba, zid, zms_ftl->zone_descs[zid].wp,
 					zone_descs[zid].zone_capacity, state, cmd->opcode);
-		return NVME_SC_ZNS_INVALID_WRITE;
+			return NVME_SC_ZNS_INVALID_WRITE;
+		}
 	}
 
 	if (zone_descs[zid].wp + nr_lba >
@@ -2519,7 +2661,8 @@ static uint32_t zns_write_check(struct zms_ftl *zms_ftl, struct nvme_rw_command 
 		return NVME_SC_ZNS_ERR_OFFLINE;
 	}
 
-	__increase_write_ptr((struct zns_ftl *)(&(*zms_ftl)), zid, nr_lba);
+	if (!UBLOCK)
+		__increase_write_ptr((struct zns_ftl *)(&(*zms_ftl)), zid, nr_lba);
 	return NVME_SC_SUCCESS;
 }
 
@@ -2635,6 +2778,10 @@ static int get_flush_target_location(struct zms_ftl *zms_ftl, struct buffer *wri
 			loc = LOC_NORMAL;
 		}
 	}
+
+	//UBLOCK
+	if (loc == LOC_PSLC && ZONED_SLC)
+		loc = LOC_ZONED_PSLC;
 	return loc;
 }
 
@@ -2655,7 +2802,7 @@ static void print_writebuffer(struct zms_ftl *zms_ftl, struct buffer *write_buff
 	NVMEV_INFO("---------print write buffer end-----------\n");
 }
 
-uint64_t buffer_flush(struct zms_ftl *zms_ftl, struct buffer *write_buffer, uint64_t nsecs_start)
+static uint64_t buffer_flush_unsort(struct zms_ftl *zms_ftl, struct buffer *write_buffer, uint64_t nsecs_start)
 {
 	struct ppa ppa;
 	uint64_t lpn;
@@ -2754,7 +2901,7 @@ uint64_t buffer_flush(struct zms_ftl *zms_ftl, struct buffer *write_buffer, uint
 			zms_ftl->zone_agg_pgs[agg_idx] = 0;
 		} else {
 			uint64_t pgs_per_oneshotpg =
-				(loc == LOC_PSLC) ? spp->pslc_pgs_per_oneshotpg : spp->pgs_per_oneshotpg;
+				(loc == LOC_PSLC || loc == LOC_ZONED_PSLC || loc == LOC_COLD_PSLC) ? spp->pslc_pgs_per_oneshotpg : spp->pgs_per_oneshotpg;
 			pgs = min(pgs_per_oneshotpg, write_buffer->pgs - i);
 
 			for (int j = 0; j < pgs; j++) {
@@ -2775,7 +2922,7 @@ uint64_t buffer_flush(struct zms_ftl *zms_ftl, struct buffer *write_buffer, uint
 					zms_ftl->inplace_update++;
 				}
 				if (SLC_BYPASS && get_namespace_type(zms_ftl->zp.ns_type) != META_NAMESPACE &&
-					loc == LOC_PSLC) {
+					(loc == LOC_PSLC || loc == LOC_ZONED_PSLC || loc == LOC_COLD_PSLC)) {
 					zms_ftl->zone_agg_lpns[agg_idx][agg_len] = lpn;
 					agg_len++;
 				}
@@ -2788,12 +2935,12 @@ uint64_t buffer_flush(struct zms_ftl *zms_ftl, struct buffer *write_buffer, uint
 				nsecs_latest = max(nsecs_latest, complete_time);
 			}
 			if (SLC_BYPASS && get_namespace_type(zms_ftl->zp.ns_type) != META_NAMESPACE &&
-				(loc == LOC_PSLC)) {
+				(loc == LOC_PSLC || loc == LOC_ZONED_PSLC || loc == LOC_COLD_PSLC)) {
 				zms_ftl->zone_agg_pgs[agg_idx] = agg_len;
 			}
 		}
 
-		if (loc == LOC_PSLC)
+		if (loc == LOC_PSLC || loc == LOC_ZONED_PSLC || loc == LOC_COLD_PSLC)
 			zms_ftl->flush_to_slc += pgs;
 		else
 			zms_ftl->flush_to_regular += pgs;
@@ -2826,9 +2973,323 @@ uint64_t buffer_flush(struct zms_ftl *zms_ftl, struct buffer *write_buffer, uint
 	write_buffer->pgs = 0;
 	write_buffer->zid = -1;
 	write_buffer->time = nsecs_latest;
+	write_buffer->flush_timestamp = nsecs_latest;
 	return nsecs_latest;
 }
 
+// should be called in zoned namespace!
+static uint64_t buffer_flush_sort(struct zms_ftl *zms_ftl, struct buffer *write_buffer,
+								  uint64_t nsecs_start)
+{
+	struct ppa ppa;
+	uint64_t lpn;
+	uint64_t nsecs_latest = nsecs_start;
+	struct ssdparams *spp = &zms_ftl->ssd->sp;
+	uint32_t zid = write_buffer->zid;
+	struct zone_descriptor *zone_descs = &zms_ftl->zone_descs[zid];
+	int loc = LOC_PSLC; // Only !SLC_BYPASS could go here
+
+	uint64_t sidx = 0, eidx = 0;
+	/* OOO buffer processing */
+	if (!write_buffer->target_normal && !write_buffer->ooo_sorted) {
+		// Sort the buffer data by LBA (slba) in increasing order
+		NVMEV_CONZONE_OOO_DEBUG("[OOO] Sorting buffer data by LPN, pgs=%lld\n", write_buffer->pgs);
+
+		// Simple bubble sort (TODO:may be optimized)
+		for (int i = 0; i < write_buffer->pgs - 1; i++) {
+			for (int j = 0; j < write_buffer->pgs - i - 1; j++) {
+				if (write_buffer->lpns[j] > write_buffer->lpns[j + 1]) {
+					// Swap LPNS
+					uint64_t temp = write_buffer->lpns[j];
+					write_buffer->lpns[j] = write_buffer->lpns[j + 1];
+					write_buffer->lpns[j + 1] = temp;
+				}
+			}
+		}
+
+		// Update sorted status
+		write_buffer->ooo_sorted = true;
+		NVMEV_CONZONE_OOO_DEBUG("[OOO] WrBuf sorted: \n");
+		for (int i = 0; i < write_buffer->pgs; i++) {
+			NVMEV_CONZONE_OOO_DEBUG("%lld\n", write_buffer->lpns[i]);
+		}
+	}
+
+	uint64_t last_lpn = write_buffer->lpns[0];
+	if (WB_ONLY) {
+		int can_zoned = 0;
+		sidx = 0;
+		eidx = write_buffer->pgs - 1;
+		last_lpn = write_buffer->lpns[eidx];
+		if (zone_descs->wp == write_buffer->lpns[0] * spp->secs_per_pg) {
+			can_zoned = 1;
+			for (int i = 1; i < write_buffer->pgs; i++) {
+				if (write_buffer->lpns[i] != write_buffer->lpns[i - 1] + 1) {
+					can_zoned = 0;
+					break;
+				}
+			}
+		}
+
+		if (can_zoned) {
+			loc = LOC_ZONED_PSLC;
+			__increase_write_ptr((struct zns_ftl *)(&(*zms_ftl)), zid,
+								 (last_lpn - write_buffer->lpns[0] + 1) * spp->secs_per_pg);
+			zms_ftl->zone_mapping_pages += (eidx - sidx + 1);
+			NVMEV_CONZONE_OOO_DEBUG(
+				"[OOO] lpns [%lld,%lld] could be written to zoned SLC! P.S. write buffer lpns: "
+				"idx [%lld,%lld],lpns[%lld,%lld] current zid %d wp %lld\n",
+				write_buffer->lpns[0], last_lpn, sidx, eidx, write_buffer->lpns[sidx],
+				write_buffer->lpns[eidx], zid, zone_descs->wp / spp->secs_per_pg);
+		} else {
+			zms_ftl->page_mapping_pages += (eidx - sidx + 1);
+			NVMEV_CONZONE_OOO_DEBUG("[OOO] write buffer idx [%lld,%lld] lpns [%lld,%lld] should be "
+									"written to page SLC! current zid %d wp %lld \n",
+									sidx, eidx, write_buffer->lpns[sidx], write_buffer->lpns[eidx],
+									zid, zone_descs->wp / spp->secs_per_pg);
+		}
+	} else {
+		// Check if data could be written to zoned SLC
+		if (!write_buffer->target_normal &&
+			zone_descs->wp == write_buffer->lpns[0] * spp->secs_per_pg) {
+			int i = 1;
+			eidx = 0;
+			for (;;) {
+				// reaches to the end of the zone!
+				if (last_lpn + 1 ==
+					(zone_descs->zslba + zone_descs->zone_capacity) / spp->secs_per_pg) {
+					break;
+				}
+				if (i < write_buffer->pgs && write_buffer->lpns[i] == last_lpn + 1) {
+					eidx = eidx + 1;
+					last_lpn = write_buffer->lpns[i];
+					i = i + 1;
+					continue;
+				}
+
+				struct ppa next_ppa = get_maptbl_ent(zms_ftl, last_lpn + 1);
+				if (mapped_ppa(&next_ppa)) {
+					if (get_page_location(zms_ftl, &next_ppa) != LOC_PSLC) {
+						NVMEV_ERROR("%s: Bad Location for lpn %lld\n", __func__, last_lpn + 1);
+						print_ppa(next_ppa);
+						// NVMEV_ASSERT(0);
+					}
+					last_lpn = last_lpn + 1;
+					continue;
+				}
+
+				break;
+			}
+
+			loc = LOC_ZONED_PSLC;
+			__increase_write_ptr((struct zns_ftl *)(&(*zms_ftl)), zid,
+								 (last_lpn - write_buffer->lpns[0] + 1) * spp->secs_per_pg);
+			zms_ftl->zone_mapping_pages += (eidx - sidx + 1);
+			// NVMEV_CONZONE_OOO_PATH_DEBUG("[PATH I] zid %d write [%lld,%lld] to zoned SLC \n",
+			// zid, 							 write_buffer->lpns[0], last_lpn);
+			NVMEV_CONZONE_OOO_DEBUG(
+				"[OOO] lpns [%lld,%lld] could be written to zoned SLC! P.S. write buffer lpns: "
+				"idx [%lld,%lld],lpns[%lld,%lld] current zid %d wp %lld\n",
+				write_buffer->lpns[0], last_lpn, sidx, eidx, write_buffer->lpns[sidx],
+				write_buffer->lpns[eidx], zid, zone_descs->wp / spp->secs_per_pg);
+		} else {
+			if (!write_buffer->target_normal) {
+				uint64_t delta = write_buffer->lpns[0] - zone_descs->wp / spp->secs_per_pg;
+				for (int i = 1; i < write_buffer->pgs; i++) {
+					if (write_buffer->lpns[i] != write_buffer->lpns[i - 1] + 1) {
+						if (write_buffer->lpns[i] < write_buffer->lpns[i - 1]) {
+							NVMEV_ERROR("UNSORTED WRITE BUFFER?\n");
+							for (int j = 0; j < write_buffer->pgs; j++) {
+								NVMEV_CONZONE_OOO_DEBUG("%lld\n", write_buffer->lpns[j]);
+							}
+							break;
+						} else
+							delta += (write_buffer->lpns[i] - write_buffer->lpns[i - 1] - 1);
+					}
+				}
+
+				sidx = delta < write_buffer->pgs ? write_buffer->pgs - delta : 0;
+				eidx = write_buffer->pgs - 1;
+				NVMEV_CONZONE_OOO_DEBUG("[OOO] delta = %lld\n", delta);
+				loc = LOC_PSLC;
+			} else {
+				sidx = 0;
+				eidx = write_buffer->pgs - 1;
+				loc = LOC_COLD_PSLC;
+			}
+
+			last_lpn = write_buffer->lpns[eidx];
+			NVMEV_CONZONE_OOO_DEBUG("[OOO] write buffer idx [%lld,%lld] lpns [%lld,%lld] should be "
+									"written to page SLC! current zid %d wp %lld is_cold %d\n",
+									sidx, eidx, write_buffer->lpns[sidx], write_buffer->lpns[eidx],
+									zid, zone_descs->wp / spp->secs_per_pg, loc == LOC_COLD_PSLC);
+			zms_ftl->page_mapping_pages += (eidx - sidx + 1);
+		}
+	}
+
+	uint64_t flush_pgs = (eidx - sidx + 1);
+	int to_write_pgs = 0;
+	uint64_t last_processed_lpn = write_buffer->lpns[sidx] - 1;
+	for (int i = sidx; i <= eidx; i++) {
+		lpn = write_buffer->lpns[i];
+		if (loc == LOC_ZONED_PSLC && lpn > last_processed_lpn + 1) {
+
+			// gap: [last_processed_lpn + 1] ... [lpn - 1]
+			NVMEV_CONZONE_OOO_DEBUG(
+				"[OOO] trying to migrate pages from page SLC to zoned SLC [%lld,%lld]\n",
+				last_processed_lpn + 1, lpn - 1);
+			uint64_t gap_start_lpn = last_processed_lpn + 1;
+			uint64_t gap_end_lpn = lpn - 1;
+			uint64_t gap_len = gap_end_lpn - gap_start_lpn + 1;
+			if (gap_len > 0) {
+				uint64_t *gap_lpns = kmalloc(gap_len * sizeof(uint64_t), GFP_KERNEL);
+				if (!gap_lpns) {
+					NVMEV_ERROR("[%d] %s: Failed to allocate memory for %llu LPNs\n",
+								zms_ftl->zp.ns->id, __func__, gap_len);
+					break;
+				}
+
+				for (int j = 0; j < gap_len; j++) {
+					gap_lpns[j] = gap_start_lpn + j;
+				}
+
+				uint64_t migrate_complete_time =
+					internal_write(zms_ftl, gap_lpns, 0, gap_len, USER_IO, loc, nsecs_start);
+
+				nsecs_latest = max(nsecs_latest, migrate_complete_time);
+				kfree(gap_lpns);
+				last_processed_lpn = gap_end_lpn;
+			}
+
+			if (zms_ftl->device_full || zms_ftl->pslc_full) {
+				NVMEV_ERROR("[%d] %s: device full after SLC migration\n", zms_ftl->zp.ns->id,
+							__func__);
+				break;
+			}
+		}
+
+		ppa = get_maptbl_ent(zms_ftl, lpn);
+		if (mapped_ppa(&ppa)) {
+			NVMEV_ERROR("update in zoned storage?? lpn %lld loc %d ppa loc %d \n", lpn, loc,
+						get_page_location(zms_ftl, &ppa));
+			print_ppa(ppa);
+
+			// SHOULD NOT GO HERE
+			/* update old page information first */
+			mark_page_invalid(zms_ftl, &ppa);
+			set_rmap_ent(zms_ftl, INVALID_LPN, &ppa);
+			zms_ftl->maptbl[lpn].ppa = UNMAPPED_PPA;
+			zms_ftl->inplace_update++;
+		}
+
+		to_write_pgs++;
+		uint64_t elpn = write_buffer->lpns[eidx];
+		if (i + 1 <= eidx && write_buffer->lpns[i + 1] > lpn + 1) {
+			elpn = lpn;
+		}
+		uint64_t complete_time =
+			nand_write(zms_ftl, nsecs_start, lpn, loc, USER_IO, to_write_pgs, elpn);
+		if (complete_time != nsecs_start) {
+			to_write_pgs = 0;
+		}
+		nsecs_latest = max(nsecs_latest, complete_time);
+
+		last_processed_lpn = lpn;
+
+		if (zms_ftl->device_full || zms_ftl->pslc_full) {
+			NVMEV_ERROR("[%d] %s: device full %d, pslc full %d\n", zms_ftl->zp.ns->id, __func__,
+						zms_ftl->device_full, zms_ftl->pslc_full);
+			break;
+		}
+		NVMEV_CONZONE_PRINT_TIME("[%d] Flush: slpn %lld pgs %lld zid %d lat %lld us\n",
+								 zms_ftl->zp.ns->id, lpn, pgs, write_buffer->zid,
+								 (nsecs_latest - nsecs_start) / 1000);
+	}
+
+	if (loc == LOC_ZONED_PSLC && last_lpn > last_processed_lpn) {
+		NVMEV_CONZONE_OOO_DEBUG(
+			"[OOO] trying to migrate pages from page SLC to zoned SLC [%lld,%lld]\n",
+			last_processed_lpn + 1, last_lpn);
+		uint64_t gap_start_lpn = last_processed_lpn + 1;
+		uint64_t gap_end_lpn = last_lpn;
+		uint64_t gap_len = gap_end_lpn - gap_start_lpn + 1;
+		if (gap_len > 0) {
+			uint64_t *gap_lpns = kmalloc(gap_len * sizeof(uint64_t), GFP_KERNEL);
+			if (!gap_lpns) {
+				NVMEV_ERROR("[%d] %s: Failed to allocate memory for %llu LPNs\n",
+							zms_ftl->zp.ns->id, __func__, gap_len);
+			} else {
+				for (int j = 0; j < gap_len; j++) {
+					gap_lpns[j] = gap_start_lpn + j;
+				}
+
+				uint64_t migrate_complete_time =
+					internal_write(zms_ftl, gap_lpns, 0, gap_len, USER_IO, loc, nsecs_start);
+
+				nsecs_latest = max(nsecs_latest, migrate_complete_time);
+				kfree(gap_lpns);
+				last_processed_lpn = gap_end_lpn;
+			}
+		}
+
+		if (zms_ftl->device_full || zms_ftl->pslc_full) {
+			NVMEV_ERROR("[%d] %s: device full after SLC migration\n", zms_ftl->zp.ns->id, __func__);
+		}
+	}
+
+	NVMEV_CONZONE_PRINT_TIME("[END] [%d] flush slpn %lld pgs %lld zid %d lat %lld us\n",
+							 zms_ftl->zp.ns->id, write_buffer->lpns[0], write_buffer->pgs,
+							 write_buffer->zid, (nsecs_latest - nsecs_start) / 1000);
+
+	NVMEV_CONZONE_PRINT_BW("BW: %ld/%lld KiB/us\n", BYTE_TO_KB(write_buffer->flush_data),
+						   (nsecs_latest - write_buffer->time) / 1000);
+
+	zms_ftl->host_w_pgs += flush_pgs;
+	if (flush_pgs < write_buffer->pgs) {
+		zms_ftl->early_flush_cnt++;
+	}
+
+	write_buffer->flush_data -= flush_pgs * spp->pgsz;
+	if (eidx < write_buffer->pgs - 1) {
+		int i, j;
+		for (i = sidx, j = eidx + 1; j < write_buffer->pgs; i++, j++) {
+			write_buffer->lpns[i] = write_buffer->lpns[j];
+		}
+		sidx = i;
+		eidx = write_buffer->pgs - 1;
+	}
+	for (int i = sidx; i <= eidx; i++) {
+		write_buffer->lpns[i] = INVALID_LPN;
+	}
+	write_buffer->pgs -= flush_pgs;
+	if (write_buffer->pgs == 0) {
+		write_buffer->zid = -1;
+	}
+	write_buffer->time = nsecs_latest;
+	write_buffer->flush_timestamp = nsecs_latest;
+	NVMEV_CONZONE_OOO_DEBUG(
+		"write buffer idx [%lld,%lld] marked invalid, now pgs %lld zid %d current write buffer:\n",
+		sidx, eidx, write_buffer->pgs, write_buffer->zid);
+	for (int j = 0; j < write_buffer->pgs; j++) {
+		NVMEV_CONZONE_OOO_DEBUG("%lld\n", write_buffer->lpns[j]);
+	}
+	return nsecs_latest;
+}
+
+uint64_t buffer_flush(struct zms_ftl *zms_ftl, struct buffer *write_buffer, uint64_t nsecs_start)
+{
+	if (write_buffer->should_sort)
+		return buffer_flush_sort(zms_ftl, write_buffer, nsecs_start);
+	else
+		return buffer_flush_unsort(zms_ftl, write_buffer, nsecs_start);
+}
+
+static int path_selector(int temp)
+{
+	if (temp == COLD)
+		return 1;
+	return 0;
+}
 static bool handle_write_request(struct zms_ftl *zms_ftl, struct nvmev_request *req,
 								 struct nvmev_result *ret)
 {
@@ -2838,6 +3299,7 @@ static bool handle_write_request(struct zms_ftl *zms_ftl, struct nvmev_request *
 	uint64_t slba = cmd->slba;
 	uint64_t nr_lba = __nr_lbas_from_rw_cmd(cmd);
 	uint64_t slpn, elpn, lpn;
+	int tempid = cmd->dsmgmt >> 16;
 
 	uint64_t nsecs_start = req->nsecs_start;
 	uint64_t nsecs_xfer_completed = nsecs_start;
@@ -2942,6 +3404,28 @@ static bool handle_write_request(struct zms_ftl *zms_ftl, struct nvmev_request *
 		NVMEV_INFO("NVME_SC_ZNS_INVALID_WRITE\n");
 		goto out;
 	}
+
+	if (zms_ftl->zp.ns_type == SSD_TYPE_CONZONE_ZONED) {
+		if (zms_ftl->zone_hotness[zid] == NOTEMP) {
+			// get the tempid (hot:warm == 2:8)
+			if (tempid == NOTEMP) {
+				u32 random_val = get_random_u32();
+				if (random_val < (U32_MAX / 5)) {
+					tempid = HOT;
+				} else {
+					tempid = COLD;
+				}
+			}
+			if (tempid == HOT) {
+				zms_ftl->hot_zone_cnt++;
+			} else {
+				zms_ftl->cold_zone_cnt++;
+			}
+			zms_ftl->zone_hotness[zid] = tempid;
+			NVMEV_CONZONE_OOO_PATH_DEBUG("[PATH II] set %d for zone %d\n", tempid, zid);
+		}
+		write_buffer->target_normal = path_selector(zms_ftl->zone_hotness[zid]);
+	}
 	write_buffer->sqid = req->sq_id;
 	uint64_t lock_wait_time = 0;
 
@@ -2958,7 +3442,9 @@ static bool handle_write_request(struct zms_ftl *zms_ftl, struct nvmev_request *
 
 	// lock_wait_time += (cpu_clock(zms_ftl->ssd->cpu_nr_dispatcher) - zms_ftl->last_stime);
 	// NVMEV_INFO("ns %d get write buffer (%p) curr lpn %lld pgs %lld\n", zms_ftl->zp.ns->id, write_buffer, slpn, elpn - slpn + 1);
+	int flushed = 0;
 	for (lpn = slpn; lpn <= elpn; lpn += pgs) {
+		flushed = 0;
 		pgs = min(elpn - lpn + 1, (uint64_t)(write_buffer->tt_lpns - write_buffer->pgs));
 
 		uint64_t *lpns = NULL;
@@ -2978,6 +3464,15 @@ static bool handle_write_request(struct zms_ftl *zms_ftl, struct nvmev_request *
 
 		if (wpgs == 0)
 			continue;
+		
+		if (write_buffer->should_sort && write_buffer->ooo_sorted &&
+			is_zoned(zms_ftl->zp.ns_type) && write_buffer->pgs > 0) {
+			uint64_t sort_slpn = (lpns != NULL ? lpns[0] : lpn);
+			// uint64_t sort_elpn = (lpns != NULL ? lpns[wpgs - 1] : lpn + wpgs - 1);
+			if (write_buffer->lpns[write_buffer->pgs - 1] > sort_slpn) {
+				write_buffer->ooo_sorted = false;
+			}
+		}
 
 		for (i = write_buffer->pgs, j = 0; i < write_buffer->pgs + wpgs && j < wpgs; i++, j++) {
 			write_buffer->lpns[i] = lpns != NULL ? lpns[j] : lpn + j;
@@ -3017,9 +3512,10 @@ static bool handle_write_request(struct zms_ftl *zms_ftl, struct nvmev_request *
 
 		/* Aggregate write io or unaligned io*/
 		//|| lpn + pgs >= elpn
-		if (write_buffer->flush_data == write_buffer->capacity) {
+		if (write_buffer->flush_data == write_buffer->capacity || (WB_FLUSH_TIMEWINDOW && write_buffer->newdata_timestamp > write_buffer->flush_timestamp && write_buffer->newdata_timestamp - write_buffer->flush_timestamp > WB_FLUSH_TIMEWINDOW)) {
 			uint64_t nsecs_completed = buffer_flush(zms_ftl, write_buffer, nsecs_xfer_completed);
 			nsecs_latest = max(nsecs_completed, nsecs_latest);
+			flushed = 1;
 		}
 		if (zms_ftl->device_full || zms_ftl->pslc_full)
 			break;
@@ -3044,6 +3540,9 @@ out:
 		ret->nsecs_target = nsecs_xfer_completed;
 
 	if (write_buffer) {
+		if (flushed == 0) {
+			write_buffer->newdata_timestamp = nsecs_xfer_completed;
+		}
 		schedule_internal_operation(req->sq_id, nsecs_latest, write_buffer, 0);
 		NVMEV_CONZONE_RW_DEBUG("w nsid %d write buffer lat %lld us dest release in %lld us \n",
 							   zms_ftl->zp.ns->id, (nsecs_latest - zms_ftl->last_stime) / 1000,
@@ -3358,6 +3857,7 @@ void zone_reset(struct zms_ftl *zms_ftl, uint64_t zid, int sqid)
 
 	zms_ftl->zone_agg_pgs[zid] = 0;
 	zms_ftl->zone_reset_cnt++;
+	zms_ftl->zone_hotness[zid] = NOTEMP;
 	NVMEV_CONZONE_GC_DEBUG("ns %d Zone %lld (%lld-%lld) vs [%lld-%lld] Reset. pSLC lines: "
 						   "%d/%d/%d/%d, normal lines %d/%d/%d/%d "
 						   "(free/full/victim/all)\n",

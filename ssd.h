@@ -194,7 +194,13 @@ struct buffer {
 	bool busy;
 	size_t flush_data;
 	size_t capacity; // avaliable buffer size
-	uint64_t time;	 // for flush bandwidth
+	uint64_t time;				// for flush bandwidth
+	uint64_t newdata_timestamp; // for time-based flush
+	uint64_t flush_timestamp;	// for time-based flush (unit: ns)
+	/* OOO write buffer support - using existing buffer */
+	bool should_sort;	// whether OOO processing is enabled
+	bool target_normal; // data in the write buffer should be written to normal flash (QLC)
+	bool ooo_sorted;	// whether buffer data is sorted by slba
 };
 
 /*

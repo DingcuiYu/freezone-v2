@@ -26,6 +26,12 @@ void buffer_init(struct buffer *buf, size_t size)
 	buf->busy = false;
 	buf->flush_data = 0;
 	buf->time = 0;
+	buf->flush_timestamp = 0;
+	buf->newdata_timestamp = 0;
+	/* Initialize OOO(out of order LBA) support */
+	buf->should_sort = false; // We should sort the write buffer
+	buf->ooo_sorted = true;	  // Initially empty, considered sorted
+	buf->target_normal = false;
 }
 
 uint32_t buffer_allocate(struct buffer *buf, size_t size)

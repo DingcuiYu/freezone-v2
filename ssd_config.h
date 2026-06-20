@@ -276,14 +276,19 @@ static_assert(NR_NAMESPACES <= 2);
 
 #define CELL_MODE (CELL_MODE_TLC)
 
-#define SLC_BYPASS (1)
+#define SLC_BYPASS (0)
 static_assert(!SLC_BYPASS || (CELL_MODE != CELL_MODE_QLC));
 
 #define NORMAL_ONLY (0)
 static_assert(!(NORMAL_ONLY && !SLC_BYPASS));
 
 /* Manage SLC in zone gran */
-#define ZONED_SLC (0)
+#define ZONED_SLC (1)
+
+/* Ublock Zoned Storage*/
+#define UBLOCK (1)
+static_assert(!(UBLOCK == 1) || (SLC_BYPASS == 0));
+#define WB_ONLY (0)
 
 #define SSD_PARTITIONS (1)
 #define NAND_CHANNELS (4)
@@ -363,6 +368,7 @@ enum wb_strategy {
 	WB_MOD = 1,	   // write buffer [i] = zid % nr_wb
 };
 #define WB_MGNT (WB_STATIC)
+#define WB_FLUSH_TIMEWINDOW (320000) // ns, 0 means no time-based flush
 
 #define GLOBAL_WB_SIZE (0)
 #define WRITE_EARLY_COMPLETION 1

@@ -38,6 +38,12 @@ static void __init_buffer(struct zns_ftl *zns_ftl)
 		for (int i = 0; i < nr_zone_wb; i++) {
 			buffer_init(&(zns_ftl->zone_write_buffer[i]), wb_size);
 			zns_ftl->zone_write_buffer[i].ns_type = zns_ftl->zp.ns_type;
+#if (BASE_SSD == CONZONE_PROTOTYPE)
+			if (UBLOCK && is_zoned(zns_ftl->zp.ns_type)) {
+				zns_ftl->zone_write_buffer[i].should_sort = true;
+				NVMEV_INFO("write buffer %d set should sort\n", i);
+			}
+#endif
 		}
 
 		NVMEV_INFO("[Size of Each Write Buffer] %d KiB [LPNs per Write Buffer] %llu\n",
@@ -544,6 +550,7 @@ static void __init_sublines(struct zms_ftl *zms_ftl, struct zms_line *line)
 			.parent_id = line->id,
 			.sub_lines = NULL,
 			.rsv_nextline = NULL,
+			.minlpn = UINT_MAX,
 		};
 		line->sub_lines[i].blkid = lmid_2_blkid(zms_ftl, &line->sub_lines[i]);
 	}
@@ -600,6 +607,7 @@ static void __init_lines(struct zms_ftl *zms_ftl, int pSLC_eline, int interleave
 			.parent_id = -1,
 			.sub_lines = NULL,
 			.rsv_nextline = NULL,
+			.minlpn = UINT_MAX,
 		};
 
 		lm->lines[i].blkid = lmid_2_blkid(zms_ftl, &lm->lines[i]);
@@ -693,6 +701,10 @@ struct zms_write_pointer *zms_get_wp(struct zms_ftl *zms_ftl, uint32_t io_type, 
 
 		if (io_type != USER_IO)
 			return &zms_ftl->pslc_gc_wp;
+		if (location == LOC_ZONED_PSLC)
+			return &zms_ftl->pslc_zone_wp;
+		if (location == LOC_COLD_PSLC)
+			return &zms_ftl->pslc_cold_wp;
 		return &zms_ftl->pslc_wp;
 	}
 }
@@ -704,14 +716,14 @@ struct zms_line *get_next_free_line(struct zms_ftl *zms_ftl, int location)
 
 	if (!curline) {
 		NVMEV_ERROR("ns %d No free line left in %s VIRT !!!!\n", zms_ftl->zp.ns->id,
-					(location == LOC_PSLC) ? "pslc" : "normal");
+					(location == LOC_PSLC || location == LOC_ZONED_PSLC || location == LOC_COLD_PSLC) ? "pslc" : "normal");
 		NVMEV_ERROR("[pSLC] write credit: %ld, credits to refill %ld\n",
 					zms_ftl->pslc_wfc.write_credits, zms_ftl->pslc_wfc.credits_to_refill);
 		NVMEV_ERROR("[Normal] write credit: %ld, credits to refill %ld\n",
 					zms_ftl->wfc.write_credits, zms_ftl->wfc.credits_to_refill);
 		NVMEV_ERROR("zone reset cnt: %llu\n", zms_ftl->zone_reset_cnt);
 		print_lines(zms_ftl);
-		if (location == LOC_PSLC) {
+		if (location == LOC_PSLC || location == LOC_ZONED_PSLC || location == LOC_COLD_PSLC) {
 			if (zms_ftl->zp.ns_type == SSD_TYPE_CONZONE_ZONED) {
 				int *agg_len = zms_ftl->zone_agg_pgs;
 				uint64_t **agg = zms_ftl->zone_agg_lpns;
@@ -865,6 +877,8 @@ static void zms_realize_ftl(struct zms_ftl *zms_ftl)
 	// 	kmem_cache_create(cache_name, sizeof(struct nand_cmd), 0, SLAB_HWCACHE_ALIGN, NULL);
 
 	// NVMEV_INFO("ZMS FTL Workspace & Cache Initialized\n");
+	if (zms_ftl->zp.ns_type == SSD_TYPE_CONZONE_ZONED)
+		zms_ftl->zone_hotness = kzalloc(sizeof(int) * zms_ftl->zp.nr_zones, GFP_KERNEL);
 }
 
 void zms_init_namespace(struct nvmev_ns *ns, uint32_t id, uint64_t size, void *mapped_addr,
@@ -902,6 +916,8 @@ void zms_print_statistic_info(struct zms_ftl *zms_ftl)
 	NVMEV_INFO("------------MISAO--device %d statistic info-----------\n", zms_ftl->zp.ns->id);
 	NVMEV_INFO("[# of Zone Resets] %lld [# of Zone Writes] %lld\n", zms_ftl->zone_reset_cnt,
 			   zms_ftl->zone_write_cnt);
+	NVMEV_INFO("[# of Hot Zone Writes] %d [# of Cold Cold Writes] %d\n", zms_ftl->hot_zone_cnt,
+			   zms_ftl->cold_zone_cnt);
 	NVMEV_INFO("[# of Host Read Requests] %lld\n", zms_ftl->host_rrequest_cnt);
 	NVMEV_INFO("[# of Host Write Requests] %lld\n", zms_ftl->host_wrequest_cnt);
 	NVMEV_INFO("[# of Host Flush Requests] %lld\n", zms_ftl->host_flush_cnt);
@@ -929,6 +945,10 @@ void zms_print_statistic_info(struct zms_ftl *zms_ftl)
 			   zms_ftl->device_copy_pgs, zms_ftl->migration_pgs, zms_ftl->gc_pgs);
 	NVMEV_INFO("[avg lock wait time] %lld / %lld\n", zms_ftl->avg_wait_for_lock,
 			   zms_ftl->host_wrequest_cnt);
+	NVMEV_INFO("[badorder] %d\n", zms_ftl->badorder);
+	// OOO buffer sort statistics
+	NVMEV_INFO("[OOO Buffer Sort - Page Mapping Pages] %lld\n", zms_ftl->page_mapping_pages);
+	NVMEV_INFO("[OOO Buffer Sort - Zone Mapping Pages] %lld\n", zms_ftl->zone_mapping_pages);
 }
 
 void zms_remove_namespace(struct nvmev_ns *ns)
@@ -948,6 +968,8 @@ void zms_remove_namespace(struct nvmev_ns *ns)
 	}
 	kfree(zms_ftl->zone_agg_lpns);
 	pqueue_free(zms_ftl->migrating_line_pq);
+	if (zms_ftl->zp.ns_type == SSD_TYPE_CONZONE_ZONED)
+		kfree(zms_ftl->zone_hotness);
 	kfree(zms_ftl->gc_agg_lpns);
 	kfree(zms_ftl->read_prev_ppas);
 	kfree(zms_ftl->read_agg_size);

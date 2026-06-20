@@ -30,6 +30,10 @@
 	// printk(KERN_INFO "%s: " string, NVMEV_DRV_NAME, ##args)
 #define NVMEV_CONZONE_PRINT_BW(string, args...) \
 	// printk(KERN_INFO "%s: " string, NVMEV_DRV_NAME, ##args)
+#define NVMEV_CONZONE_OOO_DEBUG(string, args...)                                                   \
+	// printk(KERN_INFO "%s: " string, NVMEV_DRV_NAME, ##args)
+#define NVMEV_CONZONE_OOO_PATH_DEBUG(string, args...)                                              \
+	// printk(KERN_INFO "%s: " string, NVMEV_DRV_NAME, ##args)
 enum {
 	SUCCESS = 0,
 	FAILURE = 1,
@@ -38,6 +42,8 @@ enum {
 enum {
 	LOC_NORMAL = 0,
 	LOC_PSLC = 1,
+	LOC_COLD_PSLC = 2,
+	LOC_ZONED_PSLC = 3,
 };
 
 enum {
@@ -132,6 +138,9 @@ struct zms_line {
 	int blkid; /*the block id*/
 	int type;  /*User or Internal*/
 	struct migrating_lineid mid;
+	//[UBLOCK]
+	uint64_t minlpn; // for cold page slc migration
+	int temp;
 	// max 2 level lines
 	int parent_id;
 	struct zms_line *sub_lines;
@@ -212,6 +221,9 @@ struct zms_ftl {
 	struct zms_line_mgmt lm;
 	// pSLC
 	struct zms_write_pointer pslc_wp;
+	 //UBLOCK
+	struct zms_write_pointer pslc_zone_wp;
+	struct zms_write_pointer pslc_cold_wp;
 	struct zms_write_pointer pslc_gc_wp;
 	struct zms_write_flow_control pslc_wfc;
 	// GC
@@ -275,6 +287,16 @@ struct zms_ftl {
 	int device_copy_pgs;  // for debug
 	uint64_t lock_last_stime;
 	uint64_t avg_wait_for_lock; // for debug
+	// OOO buffer sort statistics
+	int badorder;
+	uint64_t page_mapping_pages;
+	uint64_t zone_mapping_pages;
+	int slc_w_pgs;
+	int qlc_w_pgs;
+	// hotness
+	int *zone_hotness;
+	int hot_zone_cnt;
+	int cold_zone_cnt;
 
 	struct zms_workspace ws;
 	struct ppa *read_prev_ppas;
