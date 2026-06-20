@@ -188,7 +188,14 @@ def extract_insmod_command(output):
     return matches[-1].strip()
 
 
-def configure_mount_py(insmod_cmd):
+def mkfs_command_for_interface(interface_type):
+    if interface_type == "block":
+        return 'f"sudo ./mkfs.f2fs -f -c {DATA_DEVICE} {META_DEVICE}"'
+    return 'f"sudo ./mkfs.f2fs -f -m -c {DATA_DEVICE} {META_DEVICE}"'
+
+
+def configure_mount_py(insmod_cmd, interface_type):
+    mkfs_cmd = mkfs_command_for_interface(interface_type)
     text = MOUNT_PATH.read_text(encoding="utf-8")
     new_text, count = re.subn(
         r'^INSMOD_CMD\s*=\s*f?["\'].*?["\']\s*$',
@@ -199,8 +206,20 @@ def configure_mount_py(insmod_cmd):
     )
     if count != 1:
         raise RuntimeError("Could not find INSMOD_CMD in scripts/mount.py")
+    new_text, count = re.subn(
+        r'^MKFS_CMD\s*=.*$',
+        f"MKFS_CMD = {mkfs_cmd}",
+        new_text,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    if count != 1:
+        raise RuntimeError("Could not find MKFS_CMD in scripts/mount.py")
     MOUNT_PATH.write_text(new_text, encoding="utf-8")
-    print(f"[{now_string()}] Configured mount.py: INSMOD_CMD={insmod_cmd}")
+    print(
+        f"[{now_string()}] Configured mount.py: "
+        f"INSMOD_CMD={insmod_cmd}, MKFS_CMD={mkfs_cmd}"
+    )
 
 
 def automate_size_py(interface_type, log_path):
@@ -490,7 +509,7 @@ def main():
             configure_exp_py(exp)
             if not args.skip_size:
                 insmod_cmd = automate_size_py(exp.interface_type, size_log)
-                configure_mount_py(insmod_cmd)
+                configure_mount_py(insmod_cmd, exp.interface_type)
             if args.dry_run:
                 print(f"[{now_string()}] Dry run configured {exp.name}; skipping exp.py launch")
                 continue

@@ -418,7 +418,7 @@ static_assert(META_pSLC_INIT_BLKS >= 4); // for gc
 #define pSLC_ONESHOT_PAGE_SIZE (FLASH_PAGE_SIZE)
 static_assert(((pSLC_BLK_SIZE * PLNS_PER_LUN) % pSLC_ONESHOT_PAGE_SIZE) == 0);
 
-#define DATA_pSLC_INIT_BLKS (4)
+#define DATA_pSLC_INIT_BLKS (8)
 #define DATA_pSLC_RSV_SIZE \
 	(BLK_SIZE * NAND_CHANNELS * LUNS_PER_NAND_CH * PLNS_PER_LUN * DATA_pSLC_INIT_BLKS)
 // static_assert(DATA_pSLC_INIT_BLKS >= 4);
