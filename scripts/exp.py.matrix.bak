@@ -303,6 +303,7 @@ def main():
 
     # Execute all tasks
     task_d()
+
     print("\n" * 3 + "=" * 80)
     print("All tasks completed.")
     print(f"All log files are saved in the '{LOG_DIR}/' directory.")

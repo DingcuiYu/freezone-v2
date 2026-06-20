@@ -11,7 +11,8 @@ DATA_DEVICE = "/dev/nvme2n2"
 ## 1056 MiB zone ( 32 GiB )
 ## zoned sudo insmod ./nvmev.ko memmap_start=102G memmap_size=44881M cpus=37,39
 ## block sudo insmod ./nvmev.ko memmap_start=102G memmap_size=41713M cpus=37,39
-INSMOD_CMD = f"sudo insmod ./nvmev.ko memmap_start=102G memmap_size=44881M cpus=37,39"
+INSMOD_CMD = f"sudo insmod ./nvmev.ko memmap_start=102G memmap_size=41713M cpus=37,39"
+
 MKFS_DIR = "f2fs-tools-1.14.0/mkfs"
 # block sudo ./mkfs.f2fs -f -c /dev/nvme2n2 /dev/nvme2n1
 # zone sudo ./mkfs.f2fs -f -m -c /dev/nvme2n2 /dev/nvme2n1

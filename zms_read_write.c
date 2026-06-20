@@ -60,38 +60,11 @@ static int get_line_location(struct zms_ftl *zms_ftl, struct zms_line *line)
 	}
 }
 
-// static struct zms_line *get_line(struct zms_ftl *zms_ftl, struct ppa *ppa)
-// {
-// 	struct ssdparams *spp = &zms_ftl->ssd->sp;
-// 	struct zms_line_mgmt *lm = &zms_ftl->lm;
-// 	int lmid;
-// 	struct zms_line *line;
-// 	if (get_namespace_type(zms_ftl->zp.ns_type) == META_NAMESPACE) {
-// 		lmid = ppa->zms.blk;
-// 	} else {
-// 		lmid = ppa->zms.blk - (spp->meta_pslc_blks + spp->meta_normal_blks);
-// 	}
-// 	if (lmid >= lm->tt_lines) {
-// 		NVMEV_ERROR("lmid >= lm->tt_line! ppa blk %d meta pslc blk %lld meta normal blk %lld lmid %d tt lines %u\n",
-// 					ppa->zms.blk, spp->meta_pslc_blks, spp->meta_normal_blks, lmid, lm->tt_lines);
-// 		NVMEV_ASSERT(0);
-// 	}
-
-// 	line = &lm->lines[lmid];
-// 	if (lm->lines[lmid].sub_lines) {
-// 		int sublmid = ppa->zms.lun * (spp->nchs * spp->pls_per_lun) +
-// 					  ppa->zms.ch * spp->pls_per_lun + ppa->zms.pl;
-// 		if (sublmid >= spp->blks_per_line) {
-// 			NVMEV_ERROR(
-// 				"sublmid >= spp->blks_per_line! ppa (ch %d lun %d) sublm id %d blks per line "
-// 				"%ld \n",
-// 				ppa->zms.ch, ppa->zms.lun, sublmid, spp->blks_per_line);
-// 			NVMEV_ASSERT(0);
-// 		}
-// 		line = &lm->lines[lmid].sub_lines[sublmid];
-// 	}
-// 	return line;
-// }
+static inline bool line_reclaimable_without_copy(struct zms_line *line)
+{
+    return line->vpc == 0 &&
+           line->ipc + line->rpc == line->pgs_per_line;
+}
 
 static struct zms_line *get_line(struct zms_ftl *zms_ftl, struct ppa *ppa)
 {
@@ -141,24 +114,64 @@ static struct zms_line *get_line(struct zms_ftl *zms_ftl, struct ppa *ppa)
 
 static uint64_t ppa_2_pgidx(struct zms_ftl *zms_ftl, struct ppa *ppa)
 {
-	struct ssdparams *spp = &zms_ftl->ssd->sp;
-	struct zms_line *line = get_line(zms_ftl, ppa);
-	uint64_t lineid = (line->parent_id == -1) ? line->id : line->parent_id;
-	uint64_t pgidx;
+    struct ssdparams *spp = &zms_ftl->ssd->sp;
+    struct zms_line_mgmt *lm = &zms_ftl->lm;
+    struct zms_line *line = get_line(zms_ftl, ppa);
+    struct nand_block *blk = get_blk(zms_ftl->ssd, ppa);
 
-	// Mapped as interleave, but does not represent the actual address iterations
+    if (line->parent_id == -1) {
+        uint64_t base = (uint64_t)line->id * line->pgs_per_line;
 
-	pgidx = lineid * line->pgs_per_line;
-	pgidx += (ppa->zms.pg / spp->pgs_per_oneshotpg) *
-			 (spp->pgs_per_oneshotpg * spp->nchs * spp->luns_per_ch * spp->pls_per_lun);
+        int pgs_per_flashpg =
+            (blk->nand_type == CELL_MODE_SLC)
+                ? spp->pslc_pgs_per_flashpg
+                : spp->pgs_per_flashpg;
 
-	uint64_t parallel_idx = ppa->zms.lun * (spp->nchs * spp->pls_per_lun) +
-							ppa->zms.ch * spp->pls_per_lun + ppa->zms.pl;
-	pgidx += parallel_idx * spp->pgs_per_oneshotpg;
+        int rows_per_line = (spp->tt_luns / spp->line_groups) / spp->nchs;
+        int base_lun = (ppa->zms.lun / rows_per_line) * rows_per_line;
+        int lun_off = ppa->zms.lun - base_lun;
 
-	// pg offset
-	pgidx += ppa->zms.pg % spp->pgs_per_oneshotpg;
-	return pgidx;
+        uint64_t parallel =
+            (uint64_t)lun_off * spp->nchs * spp->pls_per_lun +
+            (uint64_t)ppa->zms.ch * spp->pls_per_lun +
+            ppa->zms.pl;
+
+        uint64_t stripe =
+            (uint64_t)pgs_per_flashpg *
+            rows_per_line *
+            spp->nchs *
+            spp->pls_per_lun;
+
+        uint64_t off =
+            (ppa->zms.pg / pgs_per_flashpg) * stripe +
+            parallel * pgs_per_flashpg +
+            (ppa->zms.pg % pgs_per_flashpg);
+
+        if (off >= line->pgs_per_line) {
+            NVMEV_ERROR("ppa_2_pgidx overflow line(%d,%d) off %llu line_pgs %lu "
+                        "ppa ch %d lun %d pl %d blk %d pg %d\n",
+                        line->parent_id, line->id, off, line->pgs_per_line,
+                        ppa->zms.ch, ppa->zms.lun, ppa->zms.pl,
+                        ppa->zms.blk, ppa->zms.pg);
+        }
+
+        return base + off;
+    }
+
+    /*
+     * subline: one concrete block/plane. The parent line owns the rmap range,
+     * and subline id selects the block inside that parent line.
+     */
+    struct zms_line *parent = &lm->lines[line->parent_id];
+    uint64_t base = (uint64_t)parent->id * parent->pgs_per_line;
+    uint64_t off = (uint64_t)line->id * line->pgs_per_line + ppa->zms.pg;
+
+    if (off >= parent->pgs_per_line) {
+        NVMEV_ERROR("ppa_2_pgidx subline overflow parent %d sub %d off %llu parent_pgs %lu\n",
+                    parent->id, line->id, off, parent->pgs_per_line);
+    }
+
+    return base + off;
 }
 
 static bool flashpage_same(struct zms_ftl *zms_ftl, struct ppa ppa1, struct ppa ppa2)
@@ -1972,7 +1985,7 @@ static uint64_t internal_write(struct zms_ftl *zms_ftl, uint64_t *write_lpns, in
 				// NVMEV_ASSERT(0);
 			}
 
-			if (ZONED_SLC && io_type == MIGRATE_IO && (dest_loc == LOC_PSLC || dest_loc == LOC_COLD_PSLC || dest_loc == LOC_ZONED_PSLC)) {
+			if (ZONED_SLC && io_type == MIGRATE_IO && ((!UBLOCK && dest_loc == LOC_PSLC) || (UBLOCK && (dest_loc == LOC_COLD_PSLC || dest_loc == LOC_ZONED_PSLC)))) {
 				NVMEV_ERROR("shoudl not go here... cur lpn %lld slpn %lld elpn %lld\n", lpn,
 							write_lpns[0], write_lpns[eidx - 1]);
 				// NVMEV_ASSERT(0);
@@ -2342,20 +2355,6 @@ static struct zms_line *do_migrate_simple(struct zms_ftl *zms_ftl, int io_type)
 				NVMEV_ERROR(
 					"Migrated LPNs should be continuous!! lpn %lld slpn %lld elpn %lld\n", lpn,
 					agg_lpns[0], agg_lpns[agg_len - 1]);
-				print_agg(zms_ftl, agg_len, agg_lpns);
-				if (lpn > agg_lpns[agg_len - 1] + 1) {
-					NVMEV_INFO("----gap----\n");
-					for (uint64_t idx = agg_lpns[agg_len - 1] + 1; idx < lpn; idx++) {
-						struct ppa ippa = get_maptbl_ent(zms_ftl, idx);
-						if (mapped_ppa(&ippa)) {
-							NVMEV_INFO("lpn %lld -> ch %d lun %d pl %d blk %d pg %d\n", idx,
-									   ippa.zms.ch, ippa.zms.lun, ippa.zms.pl, ippa.zms.blk,
-									   ippa.zms.pg);
-						} else {
-							NVMEV_INFO("migrate[s] lpn %lld -> UNMAPPED PPA\n", idx);
-						}
-					}
-				}
 				NVMEV_INFO("migrate[s]: lpn %lld -> ch %d lun %d pl %d blk %d pg %d\n", lpn, ppa.zms.ch,
 						   ppa.zms.lun, ppa.zms.pl, ppa.zms.blk, ppa.zms.pg);
 				// NVMEV_ASSERT(0);
@@ -2418,7 +2417,7 @@ static void try_migrate(struct zms_ftl *zms_ftl)
 			if (lm->lines[i].sub_lines) {
 				for (int j = 0; j < zms_ftl->ssd->sp.blks_per_line; j++) {
 					if (get_line_location(zms_ftl, &lm->lines[i].sub_lines[j]) == LOC_PSLC &&
-						lm->lines[i].sub_lines[j].ipc == lm->lines[i].sub_lines[j].pgs_per_line) {
+					line_reclaimable_without_copy(&lm->lines[i].sub_lines[j])) {
 						NVMEV_CONZONE_GC_DEBUG(
 							"try direct earse line %d parent id %d pgs per line %ld\n", j, i,
 							lm->lines[i].pgs_per_line);
@@ -2432,7 +2431,7 @@ static void try_migrate(struct zms_ftl *zms_ftl)
 				}
 			} else {
 				if (get_line_location(zms_ftl, &lm->lines[i]) == LOC_PSLC &&
-					lm->lines[i].ipc == lm->lines[i].pgs_per_line) {
+					line_reclaimable_without_copy(&lm->lines[i])) {
 					NVMEV_CONZONE_GC_DEBUG("try direct earse line %d pgs per line %ld\n", i,
 										   lm->lines[i].pgs_per_line);
 					NVMEV_CONZONE_OOO_PATH_DEBUG("[PATH II] earse line %d pgs per line %ld\n", i,
