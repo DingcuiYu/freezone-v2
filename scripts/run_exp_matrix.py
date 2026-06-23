@@ -51,22 +51,22 @@ EXPERIMENTS = [
         interface_type="block",
         expected_hours=2.0,
     ),
-    Experiment(
-        name="03_conzone_fs",
-        config_name="conzone",
-        log_dir_expr='f"log/fio_results-fs/{CONFIG_NAME}"',
-        task_name="task_c",
-        interface_type="zoned",
-        expected_hours=2.0,
-    ),
-    Experiment(
-        name="04_block_fs",
-        config_name="block",
-        log_dir_expr='f"log/fio_results-fs/{CONFIG_NAME}"',
-        task_name="task_c",
-        interface_type="block",
-        expected_hours=2.0,
-    ),
+    # Experiment(
+    #     name="03_conzone_fs",
+    #     config_name="conzone",
+    #     log_dir_expr='f"log/fio_results-fs/{CONFIG_NAME}"',
+    #     task_name="task_c",
+    #     interface_type="zoned",
+    #     expected_hours=2.0,
+    # ),
+    # Experiment(
+    #     name="04_block_fs",
+    #     config_name="block",
+    #     log_dir_expr='f"log/fio_results-fs/{CONFIG_NAME}"',
+    #     task_name="task_c",
+    #     interface_type="block",
+    #     expected_hours=2.0,
+    # ),
 ]
 
 
@@ -498,8 +498,8 @@ def main():
         return 1
 
     ensure_log_files()
-    backup_exp_py()
-    backup_mount_py()
+    # backup_exp_py()
+    # backup_mount_py()
 
     signal.signal(signal.SIGTERM, lambda signum, frame: (_ for _ in ()).throw(KeyboardInterrupt))
 

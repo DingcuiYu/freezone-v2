@@ -13,11 +13,11 @@ DATA_DEVICE = "/dev/nvme2n2"
 ## 1056 MiB zone ( 32 GiB )
 ## zoned sudo insmod ./nvmev.ko memmap_start=102G memmap_size=49105M cpus=37,39
 ## block sudo insmod ./nvmev.ko memmap_start=102G memmap_size=45937M cpus=37,39
-INSMOD_CMD = f"sudo insmod ./nvmev.ko memmap_start=102G memmap_size=49105M cpus=37,39"
+INSMOD_CMD = f"sudo insmod ./nvmev.ko memmap_start=102G memmap_size=45937M cpus=37,39"
 MKFS_DIR = os.path.join(WORK_DIR, "f2fs-tools-1.14.0", "mkfs")
 # block sudo ./mkfs.f2fs -f -c /dev/nvme2n2 /dev/nvme2n1
 # zone sudo ./mkfs.f2fs -f -m -c /dev/nvme2n2 /dev/nvme2n1
-MKFS_CMD = f"sudo ./mkfs.f2fs -f -m -c {DATA_DEVICE} {META_DEVICE}"
+MKFS_CMD = f"sudo ./mkfs.f2fs -f -c {DATA_DEVICE} {META_DEVICE}"
 
 # MOUNT_CMD = "mount -o age_extent_cache,discard /dev/nvme2n1 mnt"
 MOUNT_CMD = f"sudo mount {META_DEVICE} {MOUNT_POINT}"

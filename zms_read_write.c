@@ -26,6 +26,15 @@ static inline void check_addr(int a, int max)
 	NVMEV_ERROR("%s target : %d ,max : %d\n", __func__, a, max);
 }
 
+static inline bool check_zonedslc(struct zms_ftl *zms_ftl)
+{
+	return (ZONED_SLC && zms_ftl->zp.ns_type == SSD_TYPE_CONZONE_ZONED);
+}
+
+static inline bool check_ublock(struct zms_ftl *zms_ftl)
+{
+	return (UBLOCK && zms_ftl->zp.ns_type == SSD_TYPE_CONZONE_ZONED);
+}
 static inline bool mapped_ppa(struct ppa *ppa) { return !(ppa->ppa == UNMAPPED_PPA || IS_RSV_PPA(*ppa)); }
 
 static inline bool valid_lpn(struct zms_ftl *zms_ftl, uint64_t lpn)
@@ -1588,8 +1597,8 @@ static int update_mapping_if_reserved(struct zms_ftl *zms_ftl, uint64_t lpn, int
 	if (io_type == USER_IO && get_namespace_type(zms_ftl->zp.ns_type) != META_NAMESPACE &&
 		(current_line->rpc == 0 &&
 		 current_line->vpc + current_line->ipc == current_line->pgs_per_line)) {
-		if ((!UBLOCK && (loc == LOC_PSLC || loc == LOC_COLD_PSLC || loc == LOC_ZONED_PSLC)) ||
-			(UBLOCK && loc == LOC_ZONED_PSLC)){
+		if ((!check_ublock(zms_ftl) && (loc == LOC_PSLC || loc == LOC_COLD_PSLC || loc == LOC_ZONED_PSLC)) ||
+			(check_ublock(zms_ftl) && loc == LOC_ZONED_PSLC)){
 			zms_ftl->line_write_cnt++;
 			current_line->mid.write_order = zms_ftl->line_write_cnt;
 			pqueue_insert(zms_ftl->migrating_line_pq, &current_line->mid);
@@ -1677,9 +1686,9 @@ static void update_or_reserve_mapping(struct zms_ftl *zms_ftl, uint64_t lpn, int
 			get_namespace_type(zms_ftl->zp.ns_type) != META_NAMESPACE &&
 			(current_line->rpc == 0 &&
 			 current_line->vpc + current_line->ipc == current_line->pgs_per_line)) {
-			if ((!UBLOCK &&
+			if ((!check_ublock(zms_ftl) &&
 						 (loc == LOC_PSLC || loc == LOC_COLD_PSLC || loc == LOC_ZONED_PSLC)) ||
-						(UBLOCK && loc == LOC_ZONED_PSLC)) {
+						(check_ublock(zms_ftl) && loc == LOC_ZONED_PSLC)) {
 				zms_ftl->line_write_cnt++;
 				current_line->mid.write_order = zms_ftl->line_write_cnt;
 				pqueue_insert(zms_ftl->migrating_line_pq, &current_line->mid);
@@ -1985,7 +1994,7 @@ static uint64_t internal_write(struct zms_ftl *zms_ftl, uint64_t *write_lpns, in
 				// NVMEV_ASSERT(0);
 			}
 
-			if (ZONED_SLC && io_type == MIGRATE_IO && ((!UBLOCK && dest_loc == LOC_PSLC) || (UBLOCK && (dest_loc == LOC_COLD_PSLC || dest_loc == LOC_ZONED_PSLC)))) {
+			if (check_zonedslc(zms_ftl) && io_type == MIGRATE_IO && ((!check_ublock(zms_ftl) && dest_loc == LOC_PSLC) || (check_ublock(zms_ftl) && (dest_loc == LOC_COLD_PSLC || dest_loc == LOC_ZONED_PSLC)))) {
 				NVMEV_ERROR("shoudl not go here... cur lpn %lld slpn %lld elpn %lld\n", lpn,
 							write_lpns[0], write_lpns[eidx - 1]);
 				// NVMEV_ASSERT(0);
@@ -2409,7 +2418,7 @@ static void try_migrate(struct zms_ftl *zms_ftl)
 		int serch_zid = 0;
 
 	try_erase:
-		int eio_type = UBLOCK ? MIGRATE_IO : USER_IO;
+		int eio_type = check_ublock(zms_ftl) ? MIGRATE_IO : USER_IO;
 		// io type == USER IO, so if the erased lines are in victim_pq or migrat_pq, they will be
 		// removed from them.
 		struct zms_line_mgmt *lm = &zms_ftl->lm;
@@ -2455,7 +2464,7 @@ static void try_migrate(struct zms_ftl *zms_ftl)
 		zms_ftl->should_migrate_times++;
 
 		// try to migrate cold pslc lines
-		if (zms_ftl->zp.ns_type == SSD_TYPE_CONZONE_ZONED && UBLOCK) {
+		if (check_ublock(zms_ftl)) {
 			int is_cold_migrated = 0;
 			for (uint32_t zid = serch_zid; zid < zms_ftl->zp.nr_zones; zid++) {
 				struct zone_descriptor *zone_descs = &zms_ftl->zone_descs[zid];
@@ -2529,7 +2538,7 @@ static void try_migrate(struct zms_ftl *zms_ftl)
 			}
 		}
 		if (zms_ftl->zp.ns_type == SSD_TYPE_CONZONE_BLOCK ||
-			(ZONED_SLC && zms_ftl->zp.ns_type == SSD_TYPE_CONZONE_ZONED)) {
+			check_zonedslc(zms_ftl)) {
 			sblk_line = do_migrate_simple(zms_ftl, MIGRATE_IO);
 		} else {
 			sblk_line = do_migrate(zms_ftl, MIGRATE_IO);
@@ -2638,7 +2647,7 @@ static uint32_t zns_write_check(struct zms_ftl *zms_ftl, struct nvme_rw_command 
 	if (slba != zone_descs[zid].wp) {
 		// NVMEV_INFO("[OOO] BAD order, cnt=%d\n", zms_ftl->badorder);
 		zms_ftl->badorder++;
-		if (!UBLOCK) {
+		if (!check_ublock(zms_ftl)) {
 			NVMEV_ERROR("%s WP error slba %lld nr_lba %lld zone_id %d wp %lld cap %lld state %d opcode "
 					"0x%x\n",
 					__func__, slba, nr_lba, zid, zms_ftl->zone_descs[zid].wp,
@@ -2692,7 +2701,7 @@ static uint32_t zns_write_check(struct zms_ftl *zms_ftl, struct nvme_rw_command 
 		return NVME_SC_ZNS_ERR_OFFLINE;
 	}
 
-	if (!UBLOCK)
+	if (!check_ublock(zms_ftl))
 		__increase_write_ptr((struct zns_ftl *)(&(*zms_ftl)), zid, nr_lba);
 	return NVME_SC_SUCCESS;
 }
@@ -2810,8 +2819,7 @@ static int get_flush_target_location(struct zms_ftl *zms_ftl, struct buffer *wri
 		}
 	}
 
-	//UBLOCK
-	if (loc == LOC_PSLC && ZONED_SLC)
+	if (loc == LOC_PSLC && check_zonedslc(zms_ftl))
 		loc = LOC_ZONED_PSLC;
 	return loc;
 }

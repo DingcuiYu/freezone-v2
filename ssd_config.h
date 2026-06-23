@@ -261,14 +261,14 @@ static_assert((ZONE_SIZE % DIES_PER_ZONE) == 0);
 #define NR_NAMESPACES (2ULL)
 
 static_assert(NR_NAMESPACES <= 2);
-#define PHYSICAL_META_SIZE MB(7392ULL)
+#define PHYSICAL_META_SIZE MB(4224ULL)
 
 //  32GiB ZONED: MB(4096ULL) BLOCK: MB(224ULL)
-#define LOGICAL_META_SIZE GB(2ULL)
+#define LOGICAL_META_SIZE MB(224ULL)
 
 #define NS_SSD_TYPE_0 SSD_TYPE_CONZONE_META
 #define NS_CAPACITY_0 (PHYSICAL_META_SIZE)
-#define NS_SSD_TYPE_1 SSD_TYPE_CONZONE_ZONED
+#define NS_SSD_TYPE_1 SSD_TYPE_CONZONE_BLOCK
 #define NS_CAPACITY_1 (0ULL)
 #define MDTS (6)
 // The maximum queue depth for consumer-grade devices is typically 32 (or 64) (MQES+1)
@@ -368,7 +368,7 @@ enum wb_strategy {
 	WB_MOD = 1,	   // write buffer [i] = zid % nr_wb
 };
 #define WB_MGNT (WB_STATIC)
-#define WB_FLUSH_TIMEWINDOW (320000) // ns, 0 means no time-based flush
+#define WB_FLUSH_TIMEWINDOW (0) // ns, 0 means no time-based flush 320000
 
 #define GLOBAL_WB_SIZE (0)
 #define WRITE_EARLY_COMPLETION 1

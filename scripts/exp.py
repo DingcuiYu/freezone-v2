@@ -2,7 +2,7 @@ import subprocess
 import os
 
 # Configurations
-CONFIG_NAME = "conzone"
+CONFIG_NAME = "block"
 LOG_DIR = f"log/fio_results-raw/{CONFIG_NAME}"
 BS_LIST = [
     "4k",
