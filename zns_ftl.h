@@ -3,6 +3,8 @@
 #ifndef _NVMEVIRT_ZNS_FTL_H
 #define _NVMEVIRT_ZNS_FTL_H
 
+#include <linux/list.h>
+#include <linux/spinlock.h>
 #include <linux/types.h>
 #include "nvmev.h"
 #include "nvme_zns.h"
@@ -202,6 +204,22 @@ struct zms_workspace {
 	uint64_t *gc_lpns;
 };
 
+struct zms_zone_wb_ctx {
+	struct list_head ready_entry;
+	struct buffer *buf;
+	int zid;
+	uint32_t owned_slots;
+	uint32_t max_slots;
+	bool ready;
+};
+
+struct zms_wb_slot_manager {
+	uint32_t slot_size;
+	uint32_t total_slots;
+	uint32_t free_slots;
+	struct list_head ready_list;
+};
+
 struct zms_ftl {
 	struct ssd *ssd;
 
@@ -212,6 +230,9 @@ struct zms_ftl {
 	struct buffer *write_buffer;
 	struct buffer *zrwa_buffer;
 	void *storage_base_addr;
+
+	struct zms_zone_wb_ctx *zone_wb_ctxs;
+	struct zms_wb_slot_manager wb_slots;
 
 	uint64_t current_time;
 	// l2p
@@ -293,6 +314,10 @@ struct zms_ftl {
 	uint64_t zone_mapping_pages;
 	int slc_w_pgs;
 	int qlc_w_pgs;
+	uint64_t zabm_slots_granted;
+	uint64_t zabm_pressure_flush_cnt;
+	uint64_t zabm_no_victim_cnt;
+	uint32_t zabm_max_owned_slots;
 	// hotness
 	int *zone_hotness;
 	int hot_zone_cnt;

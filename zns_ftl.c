@@ -9,12 +9,20 @@
 #include "zns_ftl.h"
 #include <linux/log2.h>
 
+static bool zns_dynamic_wb_enabled(struct zns_ftl *zns_ftl)
+{
+	return is_zoned(zns_ftl->zp.ns_type) && zns_ftl->zp.ns_type == SSD_TYPE_CONZONE_ZONED;
+}
+
 static void __init_buffer(struct zns_ftl *zns_ftl)
 {
 	uint32_t zrwa_buffer_size = zns_ftl->zp.zrwa_buffer_size;
 	uint32_t nr_zones = zns_ftl->zp.nr_zones;
 	uint32_t zone_wb_size = zns_ftl->zp.zone_wb_size;
-	uint32_t nr_zone_wb = zns_ftl->zp.ns_type == SSD_TYPE_ZNS ? nr_zones : zns_ftl->zp.nr_wb;
+	uint32_t nr_zone_wb =
+		(zns_dynamic_wb_enabled(zns_ftl) || zns_ftl->zp.ns_type == SSD_TYPE_ZNS) ?
+			nr_zones :
+			zns_ftl->zp.nr_wb;
 	if (zrwa_buffer_size) {
 		zns_ftl->zrwa_buffer = kmalloc(sizeof(struct buffer) * nr_zones, GFP_KERNEL);
 		for (int i = 0; i < nr_zones; i++)
@@ -24,7 +32,7 @@ static void __init_buffer(struct zns_ftl *zns_ftl)
 	if (zone_wb_size) {
 		uint32_t wb_size = zone_wb_size;
 #if (BASE_SSD == CONZONE_PROTOTYPE)
-		if (is_zoned(zns_ftl->zp.ns_type)) {
+		if (is_zoned(zns_ftl->zp.ns_type) && !zns_dynamic_wb_enabled(zns_ftl)) {
 			switch (WB_MGNT) {
 			case WB_STATIC:
 			case WB_MOD:
@@ -44,6 +52,14 @@ static void __init_buffer(struct zns_ftl *zns_ftl)
 				NVMEV_INFO("write buffer %d set should sort\n", i);
 			}
 #endif
+			if (zns_dynamic_wb_enabled(zns_ftl)) {
+				zns_ftl->zone_write_buffer[i].zid = i;
+				zns_ftl->zone_write_buffer[i].tt_lpns = 0;
+				zns_ftl->zone_write_buffer[i].capacity = 0;
+				zns_ftl->zone_write_buffer[i].remaining = 0;
+				zns_ftl->zone_write_buffer[i].flush_data = 0;
+				zns_ftl->zone_write_buffer[i].pgs = 0;
+			}
 		}
 
 		NVMEV_INFO("[Size of Each Write Buffer] %d KiB [LPNs per Write Buffer] %llu\n",
@@ -88,14 +104,24 @@ static void __init_descriptor(struct zns_ftl *zns_ftl)
 static void __remove_descriptor(struct zns_ftl *zns_ftl)
 {
 	if (zns_ftl->zp.zrwa_buffer_size) {
-		buffer_remove(zns_ftl->zrwa_buffer);
+		for (int i = 0; i < zns_ftl->zp.nr_zones; i++)
+			buffer_remove(&zns_ftl->zrwa_buffer[i]);
 		kfree(zns_ftl->zrwa_buffer);
 	}
 
 	if (zns_ftl->zp.zone_wb_size) {
-		buffer_remove(zns_ftl->zone_write_buffer);
+		uint32_t nr_zone_wb =
+			(zns_dynamic_wb_enabled(zns_ftl) || zns_ftl->zp.ns_type == SSD_TYPE_ZNS) ?
+				zns_ftl->zp.nr_zones :
+				zns_ftl->zp.nr_wb;
+
+		for (int i = 0; i < nr_zone_wb; i++)
+			buffer_remove(&zns_ftl->zone_write_buffer[i]);
 		kfree(zns_ftl->zone_write_buffer);
 	}
+
+	if (zns_dynamic_wb_enabled(zns_ftl))
+		kfree(((struct zms_ftl *)zns_ftl)->zone_wb_ctxs);
 
 	kfree(zns_ftl->report_buffer);
 	kfree(zns_ftl->zone_descs);
@@ -222,6 +248,40 @@ void zns_remove_namespace(struct nvmev_ns *ns)
 	ns->ftls = NULL;
 }
 
+#if (BASE_SSD == CONZONE_PROTOTYPE)
+static void zms_reclaim_dynamic_wb_slots_after_flush(struct zms_ftl *zms_ftl,
+													 struct zms_zone_wb_ctx *ctx)
+{
+	struct zms_wb_slot_manager *mgr = &zms_ftl->wb_slots;
+	struct buffer *buf;
+	uint32_t used, old_owned;
+
+	if (!ctx)
+		return;
+
+	buf = ctx->buf;
+	used = buf->pgs;
+
+	old_owned = ctx->owned_slots;
+	if (old_owned > used) {
+		mgr->free_slots += old_owned - used;
+		if (mgr->free_slots > mgr->total_slots)
+			mgr->free_slots = mgr->total_slots;
+		ctx->owned_slots = used;
+	}
+
+	buf->tt_lpns = ctx->owned_slots;
+	buf->capacity = ctx->owned_slots * mgr->slot_size;
+	if (used == 0) {
+		if (ctx->ready) {
+			list_del_init(&ctx->ready_entry);
+			ctx->ready = false;
+		}
+		buf->zid = ctx->zid;
+	}
+}
+#endif
+
 static void zns_flush(struct nvmev_ns *ns, struct nvmev_request *req, struct nvmev_result *ret)
 {
 	uint64_t start, latest;
@@ -231,11 +291,16 @@ static void zns_flush(struct nvmev_ns *ns, struct nvmev_request *req, struct nvm
 #if (BASE_SSD == CONZONE_PROTOTYPE)
 	// flush write buffer
 	struct zms_ftl *zms_ftl = (struct zms_ftl *)(&(*zns_ftl));
+	bool dynamic_wb = zns_dynamic_wb_enabled(zns_ftl);
+	uint32_t nr_wb = dynamic_wb ? zms_ftl->zp.nr_zones : zms_ftl->zp.nr_wb;
 
-	for (int i = 0; i < zms_ftl->zp.nr_wb; i++) {
+	for (int i = 0; i < nr_wb; i++) {
 		zms_ftl->write_buffer[i].sqid = req->sq_id;
 		if (zms_ftl->write_buffer[i].flush_data) {
 			buffer_flush(zms_ftl, &(zms_ftl->write_buffer[i]), 0);
+			if (dynamic_wb)
+				zms_reclaim_dynamic_wb_slots_after_flush(zms_ftl,
+									 &zms_ftl->zone_wb_ctxs[i]);
 		}
 	}
 #endif
@@ -398,16 +463,14 @@ static void zms_init_params(struct znsparams *zpp, uint64_t physical_size, struc
 		NVMEV_INFO("[# of pSLC Superblocks] %d \n", zpp->pslc_blks);
 		return;
 	} else if (ns_type == SSD_TYPE_CONZONE_ZONED) {
-		uint32_t nr_zones;
 		zpp->logical_size = zpp->physical_size - DATA_pSLC_RSV_SIZE;
-		zpp->nr_wb = SLC_BYPASS ? ZONE_WB_SIZE / (ONESHOT_PAGE_SIZE * PLNS_PER_ZONE)
-								: ZONE_WB_SIZE / (pSLC_ONESHOT_PAGE_SIZE * PLNS_PER_ZONE);
 		zpp->zone_wb_size = ZONE_WB_SIZE;
 		zpp->pslc_blks = DATA_pSLC_INIT_BLKS;
 
 		zpp->zone_capacity = ZONE_SIZE;
 		zpp->zone_size = roundup_pow_of_two(zpp->zone_capacity);
 		zpp->nr_zones = zpp->logical_size / zpp->zone_size;
+		zpp->nr_wb = zpp->nr_zones;
 		zpp->nr_active_zones = 6;
 		zpp->nr_open_zones = 6;
 		zpp->dies_per_zone = DIES_PER_ZONE;
@@ -448,6 +511,44 @@ static void zms_init_params(struct znsparams *zpp, uint64_t physical_size, struc
 	return;
 }
 
+static void zms_init_dynamic_wb(struct zms_ftl *zms_ftl)
+{
+	struct zms_wb_slot_manager *mgr = &zms_ftl->wb_slots;
+	uint32_t total_slots;
+
+	if (zms_ftl->zp.ns_type != SSD_TYPE_CONZONE_ZONED)
+		return;
+
+	total_slots = ZONE_WB_SIZE / PG_SIZE;
+	mgr->slot_size = PG_SIZE;
+	mgr->total_slots = total_slots;
+	mgr->free_slots = total_slots;
+	INIT_LIST_HEAD(&mgr->ready_list);
+
+	zms_ftl->zone_wb_ctxs =
+		kzalloc(sizeof(struct zms_zone_wb_ctx) * zms_ftl->zp.nr_zones, GFP_KERNEL);
+	if (!zms_ftl->zone_wb_ctxs) {
+		NVMEV_ERROR("%s: failed to allocate zone write buffer contexts\n", __func__);
+		return;
+	}
+
+	for (int zid = 0; zid < zms_ftl->zp.nr_zones; zid++) {
+		struct zms_zone_wb_ctx *ctx = &zms_ftl->zone_wb_ctxs[zid];
+
+		INIT_LIST_HEAD(&ctx->ready_entry);
+		ctx->zid = zid;
+		ctx->buf = &zms_ftl->write_buffer[zid];
+		ctx->owned_slots = 0;
+		ctx->max_slots = total_slots;
+		ctx->ready = false;
+		ctx->buf->zid = zid;
+		ctx->buf->tt_lpns = 0;
+		ctx->buf->capacity = 0;
+		ctx->buf->flush_data = 0;
+		ctx->buf->pgs = 0;
+	}
+}
+
 static void zms_init_ftl(struct zms_ftl *zms_ftl, struct znsparams *zpp, void *mapped_addr)
 {
 	*zms_ftl = (struct zms_ftl){
@@ -459,6 +560,7 @@ static void zms_init_ftl(struct zms_ftl *zms_ftl, struct znsparams *zpp, void *m
 	};
 
 	__init_descriptor((struct zns_ftl *)(&(*zms_ftl)));
+	zms_init_dynamic_wb(zms_ftl);
 	if (is_zoned(zpp->ns_type)) {
 		__init_resource((struct zns_ftl *)(&(*zms_ftl)));
 	}
@@ -949,6 +1051,14 @@ void zms_print_statistic_info(struct zms_ftl *zms_ftl)
 	// OOO buffer sort statistics
 	NVMEV_INFO("[OOO Buffer Sort - Page Mapping Pages] %lld\n", zms_ftl->page_mapping_pages);
 	NVMEV_INFO("[OOO Buffer Sort - Zone Mapping Pages] %lld\n", zms_ftl->zone_mapping_pages);
+	if (zms_ftl->zp.ns_type == SSD_TYPE_CONZONE_ZONED) {
+		NVMEV_INFO("[ZABM Slots] total %u free %u max_owned %u\n",
+				   zms_ftl->wb_slots.total_slots, zms_ftl->wb_slots.free_slots,
+				   zms_ftl->zabm_max_owned_slots);
+		NVMEV_INFO("[ZABM] slots_granted %llu pressure_flush %llu no_victim %llu\n",
+				   zms_ftl->zabm_slots_granted, zms_ftl->zabm_pressure_flush_cnt,
+				   zms_ftl->zabm_no_victim_cnt);
+	}
 }
 
 void zms_remove_namespace(struct nvmev_ns *ns)
